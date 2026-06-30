@@ -1,0 +1,11 @@
+{
+  "duration": 60.0,
+  "utterances": [
+    {"speaker": "candidate", "text": "你好面试官", "start": 0.0, "end": 1.0},
+    {"speaker": "interviewer", "text": "请介绍一下红黑树", "start": 2.0, "end": 5.0},
+    {"speaker": "interviewer", "text": "和 AVL 树有什么区别", "start": 5.5, "end": 7.0},
+    {"speaker": "candidate", "text": "红黑树是近似平衡，AVL 是严格平衡", "start": 8.0, "end": 12.0},
+    {"speaker": "interviewer", "text": "进程和线程的区别呢", "start": 18.0, "end": 20.0},
+    {"speaker": "candidate", "text": "进程是资源分配的最小单位，线程是 CPU 调度的最小单位", "start": 21.0, "end": 25.0}
+  ]
+}
