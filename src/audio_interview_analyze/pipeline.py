@@ -150,6 +150,7 @@ def run_pipeline(
             "[cyan]Analyzing pairs...", total=len(analyzable)
         )
         pair_analyses: list[PairAnalysis] = []
+        per_pair_ran = False  # tracks whether any pair was newly analyzed
         for p in analyzable:
             # Per-pair LLM analysis cached at pairs/<n>.json so re-runs
             # with --reuse-cache skip the per-pair DeepSeek call.
@@ -169,16 +170,18 @@ def run_pipeline(
                     f"pairs/{p.pair_index}.json", pa.model_dump(), hash_key=hash_key
                 )
                 pair_analyses.append(pa)
+                per_pair_ran = True
             progress.update(task, advance=1)
 
-        # Stage 6: aggregate. Cached at final_report.json so re-runs skip
-        # the aggregator DeepSeek call when the per-pair inputs are
-        # unchanged.
+        # Stage 6: aggregate. Cached at final_report.json, but ONLY reused
+        # if the per-pair stage did not run in this invocation. Otherwise
+        # a re-run with new cleaned transcript + new per-pair analyses
+        # would silently produce a stale aggregated report.
         task = progress.add_task("[cyan]Aggregating report...", total=1)
         final_report_path = artifact_path("final_report.json", hash_key=hash_key)
         cached_report = (
             read_json("final_report.json", hash_key=hash_key)
-            if config.reuse_cache and final_report_path.exists()
+            if config.reuse_cache and not per_pair_ran and final_report_path.exists()
             else None
         )
         if cached_report is not None:
