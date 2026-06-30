@@ -34,11 +34,15 @@ def diarize(audio_path: Path | str, *, hf_token: str | None = None) -> list[tupl
             f"Underlying error: {type(e).__name__}: {e}"
         ) from e
 
-    # pyannote 3.x: ``pipeline(audio)`` is a generator that yields a single
-    # ``DiarizeOutput`` whose ``speaker_diarization`` is the actual
-    # ``Annotation``. (Older versions returned the Annotation directly.)
+    # pyannote 3.x: ``pipeline(audio)`` is a generator that uses the PEP 380
+    # ``return value`` idiom — the ``DiarizeOutput`` is delivered as the
+    # ``value`` of a ``StopIteration`` raised at the end of the generator.
+    # (Older versions returned the Annotation directly.)
     output = pipeline(str(audio_path))
-    result = next(output)
+    try:
+        result = next(output)
+    except StopIteration as e:
+        result = e.value
     annotation = result.speaker_diarization
     segments: list[tuple[float, float, str]] = []
     for turn, _, speaker in annotation.itertracks(yield_label=True):
