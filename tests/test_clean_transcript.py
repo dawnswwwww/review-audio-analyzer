@@ -288,3 +288,118 @@ def test_clean_transcript_length_mismatch_raises(client, sample_transcript):
     )
     with pytest.raises(ValueError, match="Length mismatch"):
         clean_transcript(client, sample_transcript)
+
+
+def _make_pass_through_response(utterances):
+    """Build a pass-through response (no corrections) for a chunk."""
+    entries = [
+        {
+            "index": i,
+            "speaker": u.speaker,
+            "start": u.start,
+            "end": u.end,
+            "text": u.text,
+            "corrections": [],
+        }
+        for i, u in enumerate(utterances)
+    ]
+    return _make_correction_response(entries)
+
+
+@respx.mock
+def test_clean_transcript_chunks_large_transcript(client):
+    """A 60-utterance transcript with default chunk_size=30 should make
+    2 LLM calls; each gets a subset; the cleaned transcript has all 60
+    utterances in order."""
+    utterances = [
+        Utterance(speaker="interviewer", text=f"Q {i}", start=float(i), end=float(i + 1))
+        for i in range(60)
+    ]
+    t = Transcript(utterances=utterances, duration=60.0)
+
+    # Mock returns a pass-through response for whatever chunk the LLM gets.
+    # The implementation uses the original chunk's text to verify the response.
+    # We just need to return any valid-length response; the test only
+    # checks call count and that the cleaned text is sensible.
+    def side_effect(request):
+        body = json.loads(request.content)
+        # Count utterances in the prompt by counting "Q " appearances
+        n_in_prompt = body["messages"][1]["content"].count('"text":')
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": _make_pass_through_response(
+                                [
+                                    Utterance(
+                                        speaker="interviewer",
+                                        text=f"passthrough {j}",
+                                        start=float(j),
+                                        end=float(j + 1),
+                                    )
+                                    for j in range(n_in_prompt)
+                                ]
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    route = respx.post("https://api.deepseek.com/v1/chat/completions").mock(
+        side_effect=side_effect
+    )
+    cleaned = clean_transcript(client, t)
+    assert len(cleaned.utterances) == 60
+    assert route.call_count == 2
+    # The mock returns "passthrough j" for each chunk (where j is the
+    # index within the chunk), so each utterance's text is "passthrough N"
+    # where N is its index within its chunk.
+    assert cleaned.utterances[0].text == "passthrough 0"
+    assert cleaned.utterances[29].text == "passthrough 29"
+    assert cleaned.utterances[30].text == "passthrough 0"
+    assert cleaned.utterances[59].text == "passthrough 29"
+
+
+@respx.mock
+def test_clean_transcript_chunking_respects_custom_size(client):
+    """Custom chunk_size=10 should make 3 LLM calls for a 30-utterance transcript."""
+    utterances = [
+        Utterance(speaker="interviewer", text=f"X {i}", start=float(i), end=float(i + 1))
+        for i in range(30)
+    ]
+    t = Transcript(utterances=utterances, duration=30.0)
+
+    def side_effect(request):
+        n_in_prompt = json.loads(request.content)["messages"][1]["content"].count('"text":')
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": _make_pass_through_response(
+                                [
+                                    Utterance(
+                                        speaker="interviewer",
+                                        text="x",
+                                        start=float(j),
+                                        end=float(j + 1),
+                                    )
+                                    for j in range(n_in_prompt)
+                                ]
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    route = respx.post("https://api.deepseek.com/v1/chat/completions").mock(
+        side_effect=side_effect
+    )
+    cleaned = clean_transcript(client, t, chunk_size=10)
+    assert len(cleaned.utterances) == 30
+    assert route.call_count == 3

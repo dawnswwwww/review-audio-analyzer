@@ -39,7 +39,7 @@ from audio_interview_analyze.cache import (
 )
 from audio_interview_analyze.llm.deepseek import DeepSeekClient
 from audio_interview_analyze.preflight import run_preflight
-from audio_interview_analyze.report.model import PairAnalysis, Transcript
+from audio_interview_analyze.report.model import FinalReport, PairAnalysis, Transcript
 from audio_interview_analyze.report.render import render_markdown
 
 
@@ -151,16 +151,43 @@ def run_pipeline(
         )
         pair_analyses: list[PairAnalysis] = []
         for p in analyzable:
-            pa = analyze_pair(client, p, cache_dir=pair_cache_dir)
-            pair_analyses.append(pa)
+            # Per-pair LLM analysis cached at pairs/<n>.json so re-runs
+            # with --reuse-cache skip the per-pair DeepSeek call.
+            pair_cache_path = artifact_path(
+                f"pairs/{p.pair_index}.json", hash_key=hash_key
+            )
+            cached_pair = (
+                read_json(f"pairs/{p.pair_index}.json", hash_key=hash_key)
+                if config.reuse_cache and pair_cache_path.exists()
+                else None
+            )
+            if cached_pair is not None:
+                pair_analyses.append(PairAnalysis.model_validate(cached_pair))
+            else:
+                pa = analyze_pair(client, p, cache_dir=pair_cache_dir)
+                write_json(
+                    f"pairs/{p.pair_index}.json", pa.model_dump(), hash_key=hash_key
+                )
+                pair_analyses.append(pa)
             progress.update(task, advance=1)
 
-        # Stage 6: aggregate
+        # Stage 6: aggregate. Cached at final_report.json so re-runs skip
+        # the aggregator DeepSeek call when the per-pair inputs are
+        # unchanged.
         task = progress.add_task("[cyan]Aggregating report...", total=1)
-        report = aggregate(client, pair_analyses, config.candidate_background)
-        # Attach the full transcript (the aggregator doesn't produce it).
-        report = report.model_copy(update={"full_transcript": transcript})
-        write_json("final_report.json", report.model_dump(), hash_key=hash_key)
+        final_report_path = artifact_path("final_report.json", hash_key=hash_key)
+        cached_report = (
+            read_json("final_report.json", hash_key=hash_key)
+            if config.reuse_cache and final_report_path.exists()
+            else None
+        )
+        if cached_report is not None:
+            report = FinalReport.model_validate(cached_report)
+        else:
+            report = aggregate(client, pair_analyses, config.candidate_background)
+            # Attach the full transcript (the aggregator doesn't produce it).
+            report = report.model_copy(update={"full_transcript": transcript})
+            write_json("final_report.json", report.model_dump(), hash_key=hash_key)
         progress.update(task, completed=1)
 
     # Stage 7: render
