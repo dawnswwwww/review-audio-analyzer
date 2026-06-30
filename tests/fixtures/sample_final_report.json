@@ -1,0 +1,33 @@
+{
+  "overall_evaluation": "候选人技术基础扎实，系统设计经验略有不足。",
+  "overall_score": 78,
+  "dimension_scores": {"技术深度": 80, "思路结构": 75, "表达清晰度": 82, "反应速度": 75},
+  "consolidated_highlights": ["数据结构基础扎实", "能够区分相似概念"],
+  "consolidated_weaknesses": ["缺少时间复杂度分析", "未举例说明"],
+  "consolidated_knowledge_points": [
+    {
+      "name": "红黑树",
+      "category": "数据结构",
+      "explanation": "一种自平衡的二叉查找树，通过在节点上记录颜色和约束规则保证近似平衡。",
+      "learning_directions": ["阅读《算法导论》第 13 章", "实现一个简单的红黑树"]
+    }
+  ],
+  "pair_analyses": [
+    {
+      "pair_index": 1,
+      "question_summary": "红黑树与 AVL 树的区别",
+      "answer_evaluation": "回答基本正确。",
+      "knowledge_points": ["红黑树", "AVL 树"],
+      "highlights": ["提到了自平衡"],
+      "weaknesses": ["缺少时间复杂度分析"],
+      "improvement_suggestions": "补充复杂度分析。"
+    }
+  ],
+  "full_transcript": {
+    "duration": 60.0,
+    "utterances": [
+      {"speaker": "interviewer", "text": "讲讲红黑树", "start": 0.0, "end": 1.0},
+      {"speaker": "candidate", "text": "红黑树是一种自平衡二叉查找树", "start": 1.5, "end": 4.0}
+    ]
+  }
+}
