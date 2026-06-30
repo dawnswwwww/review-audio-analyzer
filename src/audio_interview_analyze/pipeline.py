@@ -26,6 +26,7 @@ from rich.progress import (
 
 from audio_interview_analyze.analysis.aggregate import aggregate
 from audio_interview_analyze.analysis.analyze import analyze_pair
+from audio_interview_analyze.analysis.clean_transcript import clean_transcript
 from audio_interview_analyze.analysis.qa_pairs import build_qa_pairs, label_speakers
 from audio_interview_analyze.audio.diarize import diarize
 from audio_interview_analyze.audio.extract import extract_wav
@@ -49,6 +50,7 @@ class PipelineConfig:
     whisper_model: str = "large-v3"
     reuse_cache: bool = False
     candidate_background: str = ""
+    domain: str = "软件工程 / 前端开发 / AI Agent"
 
 
 def _progress() -> Progress:
@@ -114,6 +116,20 @@ def run_pipeline(
             whisper_segs = transcribe(str(wav_path), model_size=config.whisper_model)
             transcript = assign_speakers(whisper_segs, diarization)
             write_json("transcript.json", transcript.model_dump(), hash_key=hash_key)
+        progress.update(task, completed=1)
+
+        # Stage 3.5: clean transcript (LLM). Fixes ASR-misheard technical
+        # terms before Q+A extraction. Cached separately so the original
+        # transcript is preserved for diff/review.
+        task = progress.add_task("[cyan]Cleaning transcript...", total=1)
+        cleaned_cache = read_json("cleaned_transcript.json", hash_key=hash_key)
+        if config.reuse_cache and cleaned_cache is not None:
+            transcript = Transcript.model_validate(cleaned_cache)
+        else:
+            transcript = clean_transcript(client, transcript, domain=config.domain)
+            write_json(
+                "cleaned_transcript.json", transcript.model_dump(), hash_key=hash_key
+            )
         progress.update(task, completed=1)
 
         # Stage 4: build Q+A pairs

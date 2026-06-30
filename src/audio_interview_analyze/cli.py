@@ -52,6 +52,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help="Optional candidate background (years of experience, target role, etc.) to include in the aggregator prompt",
     )
+    p.add_argument(
+        "--domain",
+        default="软件工程 / 前端开发 / AI Agent",
+        help="Free-text description of the interview domain, used to give the LLM context for technical-term corrections in the transcript cleaning stage",
+    )
     return p
 
 
@@ -96,6 +101,7 @@ def main(argv: list[str] | None = None) -> int:
         whisper_model=args.model,
         reuse_cache=args.reuse_cache,
         candidate_background=args.background,
+        domain=args.domain,
     )
     try:
         run_pipeline(config, client=client, hf_token=hf_token)

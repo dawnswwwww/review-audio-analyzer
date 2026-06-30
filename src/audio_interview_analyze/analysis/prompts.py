@@ -130,3 +130,44 @@ def summarize_pairs_prompt(*, pair_analyses: list[dict[str, Any]]) -> str:
     """Render the user prompt for the token-overflow summarizer (Prompt 2.5)."""
     tmpl = _ENV.from_string(SUMMARIZE_PAIRS_USER_TEMPLATE)
     return tmpl.render(pair_analyses=pair_analyses)
+
+
+CLEAN_TRANSCRIPT_SYSTEM = (
+    "你是一位技术面试转写校对员。原始音频已经过 ASR（语音识别）转写，"
+    "但 ASR 在处理技术术语时经常出错（音近字误识别），例如：\n"
+    "- 英文技术术语被听成中文近音字（如 \"BUD\" → \"Vue\"、\"雷啊特\" → \"React\"、\"撕扣\" → \"Sequelize\"）\n"
+    "- 中文技术术语被听成错误字（如 \"灵火\" 可能本意是 \"流火 / 零和 / 林火\"，但要靠上下文判断）\n"
+    "- 中英混说时，ASR 可能把英文术语识别成无意义的中文词\n\n"
+    "你的任务：\n"
+    "1. **只修术语** —— 修正音近字误识别的技术术语（人名、框架名、算法名、协议名、库名、概念名）。\n"
+    "2. **保留原意** —— 不润色、不改写、不补全内容。候选人的口语化、语法错误、停顿都保留。\n"
+    "3. **靠上下文判断** —— 利用整段对话的主题，判断哪些词可能是技术术语。\n"
+    "4. **保守原则** —— 不确定时宁可保留原文；不要凭空猜。\n"
+    "5. **记录改动** —— 对每处修改，在 `corrections` 字段里说明 `原词 → 改后词：依据`。\n"
+    "6. **不修改其他字段** —— `speaker` / `start` / `end` 必须保持原样，只改 `text`。"
+)
+
+CLEAN_TRANSCRIPT_USER_TEMPLATE = """## 候选人面试方向
+{{ domain }}
+
+## 待校对的转写（JSON 数组）
+{{ transcript_json }}
+
+## 任务
+对每条 utterance 校对 `text` 字段，输出相同结构的 JSON 数组：
+
+- `index`（整数）：原始数组的下标
+- `speaker`（字符串）：与原文一致，不要修改
+- `start`（数字）：与原文一致，不要修改
+- `end`（数字）：与原文一致，不要修改
+- `text`（字符串）：校对后的文本；若无修改则与原文相同
+- `corrections`（字符串数组）：每条形如 "原词 → 改后词：依据"；若无修改则为空数组
+
+严格按 JSON 输出，不要任何额外文本。
+"""
+
+
+def clean_transcript_prompt(*, domain: str, transcript_json: str) -> str:
+    """Render the user prompt for transcript proofreading."""
+    tmpl = _ENV.from_string(CLEAN_TRANSCRIPT_USER_TEMPLATE)
+    return tmpl.render(domain=domain, transcript_json=transcript_json)
