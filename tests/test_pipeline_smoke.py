@@ -9,11 +9,20 @@ pipeline should detect zero analyzable Q+A pairs and raise a clear error
 3. No LLM call is made (verified by the fact that we never construct a
    real DeepSeekClient in this test).
 
+Runtime requirements (all four must be available on the developer machine):
+
+- ``ffmpeg`` on PATH (install with ``brew install ffmpeg``)
+- ``pyannote/speaker-diarization-3.1`` model available (HuggingFace token)
+- ``faster-whisper`` model (downloaded on first use)
+- ``DEEPSEEK_API_KEY`` environment variable (a dummy value is fine; the
+  client is constructed but never called in this test)
+
 Real-audio smoke tests should be run manually by the developer after
 setting up the environment.
 """
 
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -27,6 +36,9 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_silent_audio_raises_no_qa_error(tmp_path, monkeypatch):
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg not on PATH; install with `brew install ffmpeg` to run this test")
+
     monkeypatch.chdir(tmp_path)
     # Skip preflight by short-circuiting: the silent fixture doesn't need
     # ffmpeg or DeepSeek for the failure mode we want to test (we fail
