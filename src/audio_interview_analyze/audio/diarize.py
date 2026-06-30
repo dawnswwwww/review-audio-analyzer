@@ -25,13 +25,13 @@ def diarize(audio_path: Path | str, *, hf_token: str | None = None) -> list[tupl
     try:
         pipeline = Pipeline.from_pretrained(
             "pyannote/speaker-diarization-3.1",
-            use_auth_token=hf_token,
+            token=hf_token,
         )
     except Exception as e:
         raise RuntimeError(
             "Failed to load pyannote diarization model. "
             "Accept the model terms on HuggingFace and set HF_TOKEN. See README. "
-            f"Underlying error: {e}"
+            f"Underlying error: {type(e).__name__}: {e}"
         ) from e
 
     diarization = pipeline(str(audio_path))
