@@ -63,6 +63,10 @@ uv run audio-interview-analyze path/to/interview.mp4 --model small
 
 # Provide candidate background (years of experience, target role)
 uv run audio-interview-analyze path/to/interview.mp4 --background "3 年 Java 后端"
+
+# Specify the interview domain (helps the LLM correct technical terms
+# in the transcript cleaning stage)
+uv run audio-interview-analyze path/to/interview.mp4 --domain "后端 / Go / Kubernetes"
 ```
 
 The first run downloads ~3 GB of Whisper weights and ~100 MB of pyannote
@@ -87,16 +91,22 @@ A Markdown report with these sections:
 See [`docs/superpowers/specs/2026-06-30-audio-interview-analyzer-design.md`](docs/superpowers/specs/2026-06-30-audio-interview-analyzer-design.md)
 for the full design spec.
 
-The pipeline has 7 stages:
+The pipeline has 8 stages:
 
 ```
-extract → diarize → transcribe → build_qa_pairs → analyze_pair (LLM) →
-aggregate (LLM) → render_markdown
+extract → diarize → transcribe → clean_transcript (LLM) → build_qa_pairs →
+analyze_pair (LLM) → aggregate (LLM) → render_markdown
 ```
 
-All intermediate artifacts (extracted WAV, diarization, transcript, per-pair
-JSON) are cached under `./.interview-cache/<content-hash>/` so re-runs are
-cheap.
+The `clean_transcript` stage is an LLM proofreading pass that fixes
+ASR-misheard technical terms (e.g., "BUD" → "Vue", "灵火" → "流火")
+before Q+A extraction. Each correction is recorded with reasoning in
+the LLM's output. Use `--domain` to give the LLM context (default:
+"软件工程 / 前端开发 / AI Agent").
+
+All intermediate artifacts (extracted WAV, diarization, transcript,
+cleaned transcript, per-pair JSON) are cached under
+`./.interview-cache/<content-hash>/` so re-runs are cheap.
 
 ## Development
 
