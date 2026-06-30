@@ -51,6 +51,8 @@ class PipelineConfig:
     reuse_cache: bool = False
     candidate_background: str = ""
     domain: str = "软件工程 / 前端开发 / AI Agent"
+    enable_study_guide: bool = True
+    study_guide_path: Path | None = None
 
 
 def _progress() -> Progress:
@@ -197,6 +199,40 @@ def run_pipeline(
     md = render_markdown(report)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(md, encoding="utf-8")
+
+    # Stage 8: study guide (optional, default-on). Generates a per-KP
+    # learning guide in a separate Markdown file. Cached separately so
+    # re-runs can iterate on the study guide without re-aggregating.
+    if config.enable_study_guide:
+        from audio_interview_analyze.study.generate import generate_study_guide
+        from audio_interview_analyze.study.render import render_study_guide
+
+        study_out = config.study_guide_path or output_path.with_name(
+            output_path.stem.replace("report", "study-guide", 1) + ".md"
+            if output_path.stem.startswith("report")
+            else "study-guide.md"
+        )
+        # Default to "study-guide.md" next to the report
+        if study_out.name == output_path.name:
+            study_out = output_path.parent / "study-guide.md"
+
+        study_cache_path = artifact_path("study_guide.json", hash_key=hash_key)
+        cached_guide = (
+            read_json("study_guide.json", hash_key=hash_key)
+            if config.reuse_cache and study_cache_path.exists()
+            else None
+        )
+        if cached_guide is not None:
+            guide = cached_guide
+        else:
+            task = progress.add_task("[cyan]Generating study guide...", total=1)
+            guide = generate_study_guide(client, report)
+            write_json("study_guide.json", guide, hash_key=hash_key)
+            progress.update(task, completed=1)
+        study_md = render_study_guide(guide)
+        study_out.parent.mkdir(parents=True, exist_ok=True)
+        study_out.write_text(study_md, encoding="utf-8")
+
     return md
 
 

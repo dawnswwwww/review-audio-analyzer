@@ -57,6 +57,17 @@ def _build_parser() -> argparse.ArgumentParser:
         default="软件工程 / 前端开发 / AI Agent",
         help="Free-text description of the interview domain, used to give the LLM context for technical-term corrections in the transcript cleaning stage",
     )
+    p.add_argument(
+        "--no-study-guide",
+        action="store_true",
+        help="Skip generating the per-knowledge-point study guide (default: on)",
+    )
+    p.add_argument(
+        "--study-guide-out",
+        type=Path,
+        default=None,
+        help="Output path for the study guide Markdown (default: <output_dir>/study-guide.md)",
+    )
     return p
 
 
@@ -102,7 +113,12 @@ def main(argv: list[str] | None = None) -> int:
         reuse_cache=args.reuse_cache,
         candidate_background=args.background,
         domain=args.domain,
+        enable_study_guide=not args.no_study_guide,
+        study_guide_path=args.study_guide_out,
     )
+    if not args.no_study_guide:
+        guide_path = args.study_guide_out or (args.out.parent / "study-guide.md")
+        print(f"Study guide: {guide_path}")
     try:
         run_pipeline(config, client=client, hf_token=hf_token)
     except Exception as e:

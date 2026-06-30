@@ -171,3 +171,64 @@ def clean_transcript_prompt(*, domain: str, transcript_json: str) -> str:
     """Render the user prompt for transcript proofreading."""
     tmpl = _ENV.from_string(CLEAN_TRANSCRIPT_USER_TEMPLATE)
     return tmpl.render(domain=domain, transcript_json=transcript_json)
+
+
+STUDY_GUIDE_SYSTEM = (
+    "你是一位资深的技术导师。你的任务是把「面试中出现的知识点」转变成一份「自学者"
+    "能真正用来学习的材料」——不是百科介绍，而是「下次再被问到这个，能不能答好」的"
+    "复习资料。\n\n"
+    "核心原则：\n"
+    "1. **每条都要可学**——读完后读者应该能向别人复述这个概念。\n"
+    "2. **必须有反例**——列 3 种「面试中常见的错误回答」，这比正面定义更有教育价值。\n"
+    "3. **必须有代码**——即使是概念性知识（SSO、错误边界），也要给一个最小可运行的"
+    "代码示例；纯文字说明效果很差。\n"
+    "4. **必须有自检**——2 道题：1 道概念性（验证理解），1 道应用性（验证能否在真实"
+    "场景中使用）。\n"
+    "5. **去重**——如果两个知识点是同一件事（比如「单向数据流」和「React 状态管"
+    "理」），合并成一条，不要重复讲。\n"
+    "6. **实战导向**——所有内容服务于「面试答好 + 实际会用」两个目标。"
+)
+
+STUDY_GUIDE_USER_TEMPLATE = """## 这场面试涉及的所有知识点
+{{ knowledge_points_json }}
+
+## 任务
+为每个知识点生成一份「学习卡」，输出严格按以下 JSON 结构：
+
+```json
+{
+  "guide_title": "字符串，给这份学习指南起一个标题",
+  "preface": "字符串，2-3 句开场白：这场面试涉及哪几个知识领域、整体学习建议",
+  "knowledge_points": [
+    {
+      "name": "字符串，知识点名称",
+      "category": "字符串，类别",
+      "one_liner": "字符串，一句话核心（小白能懂、不超过 30 字）",
+      "why_interview": "字符串，1-2 句：面试为什么爱问、考察意图",
+      "core_concepts": ["字符串数组，3-5 个核心要点，每个 1 句话"],
+      "code_example": "字符串，**必须**给代码；概念性知识用最小伪代码或示意代码；空字符串视为不合格",
+      "code_language": "字符串，代码语言（javascript / python / java / typescript / sql / bash / pseudocode 等）",
+      "common_mistakes": ["字符串数组，**正好 3 条**面试中常见的错误回答/误区，每条 1-2 句"],
+      "self_check": [
+        {"question": "字符串", "answer": "字符串，简短答案"},
+        {"question": "字符串", "answer": "字符串，简短答案"}
+      ],
+      "further_reading": ["字符串数组，1-3 条具体学习资源（书名/章节、文章标题、官方文档路径），不要泛泛说「读官方文档」"]
+    }
+  ]
+}
+```
+
+严格要求：
+- 输出必须是合法 JSON，不要任何额外文本
+- `code_example` 字段不能为空
+- `common_mistakes` 必须是 3 条
+- `self_check` 必须是 2 道题
+- 如果两个知识点高度重复，合并为一条并在 `name` 里说明（如「单向数据流（含 React 状态管理）」）
+"""
+
+
+def study_guide_prompt(*, knowledge_points_json: str) -> str:
+    """Render the user prompt for study guide generation."""
+    tmpl = _ENV.from_string(STUDY_GUIDE_USER_TEMPLATE)
+    return tmpl.render(knowledge_points_json=knowledge_points_json)
