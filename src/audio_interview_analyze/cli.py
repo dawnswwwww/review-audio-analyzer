@@ -19,7 +19,13 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="audio-interview-analyze",
         description="Transcribe a technical interview and produce a Markdown analysis report.",
     )
-    p.add_argument("input", type=Path, help="Path to interview audio or video file")
+    p.add_argument(
+        "input",
+        type=Path,
+        nargs="?",
+        default=None,
+        help="Path to interview audio or video file (required unless --preflight)",
+    )
     p.add_argument(
         "--out",
         type=Path,
@@ -71,6 +77,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.preflight:
         return _print_preflight()
+
+    if args.input is None:
+        parser.error("the following arguments are required: input")
 
     preflight = run_preflight()
     if not preflight.all_ok:
