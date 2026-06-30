@@ -1,0 +1,20 @@
+[
+  {
+    "pair_index": 1,
+    "question_summary": "红黑树和 AVL 树的区别",
+    "answer_evaluation": "回答基本正确但缺少复杂度分析。",
+    "knowledge_points": ["红黑树", "AVL 树", "自平衡二叉查找树"],
+    "highlights": ["提到了自平衡的概念"],
+    "weaknesses": ["没有分析时间复杂度"],
+    "improvement_suggestions": "可以补充红黑树的插入 / 删除操作复杂度。"
+  },
+  {
+    "pair_index": 2,
+    "question_summary": "进程与线程的区别",
+    "answer_evaluation": "回答准确。",
+    "knowledge_points": ["进程", "线程", "操作系统"],
+    "highlights": [],
+    "weaknesses": [],
+    "improvement_suggestions": "可以举例说明。"
+  }
+]
