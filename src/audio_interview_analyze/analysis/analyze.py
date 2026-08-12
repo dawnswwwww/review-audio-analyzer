@@ -21,7 +21,7 @@ from audio_interview_analyze.analysis.prompts import (
 from audio_interview_analyze.llm.deepseek import DeepSeekClient
 from audio_interview_analyze.report.model import PairAnalysis, QAPair
 
-ANALYZE_MODEL = "deepseek-chat"
+ANALYZE_MODEL = "deepseek-v4-pro"
 ANALYZE_TEMPERATURE = 0.3
 ANALYZE_MAX_TOKENS = 2000
 RETRY_SUFFIX = "\n请确保输出是合法 JSON。"
@@ -76,6 +76,8 @@ def analyze_pair(
         try:
             data = _extract_json(raw)
             data["pair_index"] = pair.pair_index
+            data["question"] = pair.question
+            data["answer"] = pair.answer
             return PairAnalysis.model_validate(data)
         except (json.JSONDecodeError, ValidationError) as e:
             last_error = e
@@ -86,4 +88,27 @@ def analyze_pair(
         (cache_dir / f"pair_{pair.pair_index}_raw.txt").write_text(last_raw, encoding="utf-8")
     raise ValueError(
         f"Failed to get valid JSON for pair {pair.pair_index} after 2 attempts: {last_error}"
+    )
+
+
+def analyze_conversation(pair: QAPair) -> PairAnalysis:
+    """Build a minimal PairAnalysis for casual conversation that doesn't
+    need LLM evaluation.
+
+    The returned object has ``is_conversation=True`` and an empty
+    ``conversation_note``; the renderer will display it as a quoted
+    exchange instead of a scored analysis.
+    """
+    return PairAnalysis(
+        pair_index=pair.pair_index,
+        question=pair.question,
+        answer=pair.answer,
+        question_summary="",
+        answer_evaluation="",
+        knowledge_points=[],
+        highlights=[],
+        weaknesses=[],
+        improvement_suggestions="",
+        is_conversation=True,
+        conversation_note="",
     )

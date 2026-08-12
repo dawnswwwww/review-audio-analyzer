@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from audio_interview_analyze.analysis.qa_pairs import build_qa_pairs, label_speakers
-from audio_interview_analyze.report.model import Transcript, Utterance
+from audio_interview_analyze.report.model import QAPair, Transcript, Utterance
 
 
 @pytest.fixture
@@ -62,9 +62,11 @@ def test_build_qa_pairs_skips_empty_question_pairs(sample_transcript):
 
 
 def test_build_qa_pairs_silence_gap_closes_answer():
-    """A 8+ second silence in the middle of a candidate's answer closes
+    """An 8+ second silence in the middle of a candidate's answer closes
     the answer per spec section 9, so the candidate's next utterance
-    starts a new pair with an empty question."""
+    starts a new pair with an empty question. The empty-question pair
+    is marked as ``is_conversation`` since the candidate wasn't asked a
+    fresh question."""
     t = Transcript(
         utterances=[
             Utterance(speaker="interviewer", text="讲讲 TCP 三次握手", start=0.0, end=1.0),
@@ -75,11 +77,15 @@ def test_build_qa_pairs_silence_gap_closes_answer():
     )
     labeled = label_speakers(t)
     pairs = build_qa_pairs(labeled)
+    # The silence gap splits the answer into two pairs per spec.
     assert len(pairs) == 2
     assert pairs[0].question == "讲讲 TCP 三次握手"
     assert "客户端发送 SYN" in pairs[0].answer
+    assert "SYN+ACK" not in pairs[0].answer  # second candidate utt is in pair 1
+    assert pairs[0].is_conversation is False
     assert pairs[1].question == ""
     assert "SYN+ACK" in pairs[1].answer
+    assert pairs[1].is_conversation is True
 
 
 def test_build_qa_pairs_short_gap_keeps_answer_running():
@@ -100,6 +106,25 @@ def test_build_qa_pairs_short_gap_keeps_answer_running():
     assert "第二次握手" in pairs[0].answer
 
 
+def test_build_qa_pairs_merges_interviewer_interjections():
+    """Short interviewer affirmations should not start a new pair."""
+    t = Transcript(
+        utterances=[
+            Utterance(speaker="interviewer", text="Vue 和 React 有什么区别", start=0.0, end=1.0),
+            Utterance(speaker="candidate", text="Vue 适合中小型项目", start=2.0, end=3.0),
+            Utterance(speaker="interviewer", text="好了", start=4.0, end=4.5),
+            Utterance(speaker="candidate", text="React 适合大型项目", start=5.0, end=6.0),
+        ],
+        duration=6.0,
+    )
+    labeled = label_speakers(t)
+    pairs = build_qa_pairs(labeled)
+    assert len(pairs) == 1
+    assert pairs[0].question == "Vue 和 React 有什么区别"
+    assert "Vue 适合中小型项目" in pairs[0].answer
+    assert "React 适合大型项目" in pairs[0].answer
+
+
 def test_build_qa_pairs_short_answer_kept_not_skipped():
     """The Q+A builder emits all pairs; downstream is responsible for
     skipping short ones. This test documents that contract."""
@@ -114,3 +139,22 @@ def test_build_qa_pairs_short_answer_kept_not_skipped():
     pairs = build_qa_pairs(labeled)
     assert len(pairs) == 1
     assert pairs[0].answer == "小王"
+
+
+def test_merge_qa_pairs_merges_consecutive_groups():
+    """_merge_qa_pairs should combine rephrased questions correctly."""
+    from audio_interview_analyze.analysis.qa_pairs import _merge_qa_pairs
+
+    pairs = [
+        QAPair(question="Q1", answer="A1", q_start=0, q_end=1, a_start=2, a_end=3, pair_index=1),
+        QAPair(question="Q1 restated", answer="A1 final", q_start=4, q_end=5, a_start=6, a_end=7, pair_index=2),
+        QAPair(question="Q3", answer="A3", q_start=10, q_end=11, a_start=12, a_end=13, pair_index=3),
+    ]
+    merged = _merge_qa_pairs(pairs, [[1, 2]])
+    assert len(merged) == 2
+    assert merged[0].pair_index == 1
+    assert "Q1" in merged[0].question
+    assert "Q1 restated" in merged[0].question
+    assert "A1" in merged[0].answer
+    assert "A1 final" in merged[0].answer
+    assert merged[1].pair_index == 3

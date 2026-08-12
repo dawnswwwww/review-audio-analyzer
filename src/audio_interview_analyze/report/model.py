@@ -29,18 +29,23 @@ class QAPair(BaseModel):
     a_start: float
     a_end: float
     pair_index: int = Field(ge=1)
+    is_conversation: bool = False
 
 
 class PairAnalysis(BaseModel):
     """LLM-generated analysis of a single QAPair."""
 
     pair_index: int = Field(ge=1)
+    question: str = ""
+    answer: str = ""
     question_summary: str
     answer_evaluation: str
     knowledge_points: list[str]
     highlights: list[str]
     weaknesses: list[str]
     improvement_suggestions: str
+    is_conversation: bool = False
+    conversation_note: str = ""
 
 
 class KnowledgePoint(BaseModel):

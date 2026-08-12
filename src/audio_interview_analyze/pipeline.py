@@ -12,6 +12,7 @@ its own module — this file is the glue.
 from __future__ import annotations
 
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,9 +26,13 @@ from rich.progress import (
 )
 
 from audio_interview_analyze.analysis.aggregate import aggregate
-from audio_interview_analyze.analysis.analyze import analyze_pair
+from audio_interview_analyze.analysis.analyze import analyze_conversation, analyze_pair
 from audio_interview_analyze.analysis.clean_transcript import clean_transcript
-from audio_interview_analyze.analysis.qa_pairs import build_qa_pairs, label_speakers
+from audio_interview_analyze.analysis.qa_pairs import (
+    build_qa_pairs,
+    build_qa_pairs_with_llm,
+    label_speakers,
+)
 from audio_interview_analyze.audio.diarize import diarize
 from audio_interview_analyze.audio.extract import extract_wav
 from audio_interview_analyze.audio.transcribe import assign_speakers, transcribe
@@ -39,7 +44,7 @@ from audio_interview_analyze.cache import (
 )
 from audio_interview_analyze.llm.deepseek import DeepSeekClient
 from audio_interview_analyze.preflight import run_preflight
-from audio_interview_analyze.report.model import FinalReport, PairAnalysis, Transcript
+from audio_interview_analyze.report.model import FinalReport, PairAnalysis, QAPair, Transcript
 from audio_interview_analyze.report.render import render_markdown
 
 
@@ -48,11 +53,22 @@ class PipelineConfig:
     input_path: Path
     output_path: Path
     whisper_model: str = "large-v3"
+    whisper_backend: str = "faster-whisper"
+    asr_prompt: str = ""
     reuse_cache: bool = False
     candidate_background: str = ""
     domain: str = "软件工程 / 前端开发 / AI Agent"
+    terms_path: Path | None = None
     enable_study_guide: bool = True
     study_guide_path: Path | None = None
+    # Number of independent LLM calls (per-pair analysis, study-guide
+    # batches) to run in parallel. Prompts are identical to sequential
+    # execution, so this does not change output quality.
+    llm_concurrency: int = 4
+    # Number of transcript-cleaning chunks to process in parallel. Each
+    # chunk sees a snapshot of prior corrections rather than the full
+    # history; set to 1 for the original strictly-sequential behaviour.
+    clean_concurrency: int = 4
 
 
 def _progress() -> Progress:
@@ -99,47 +115,80 @@ def run_pipeline(
             extract_wav(input_path, wav_path)
         progress.update(task, completed=1)
 
-        # Stage 2: diarize
-        task = progress.add_task("[cyan]Diarizing speakers...", total=1)
-        diar_cache = read_json("diarization.json", hash_key=hash_key)
-        if config.reuse_cache and diar_cache is not None:
-            diarization = [(float(s[0]), float(s[1]), str(s[2])) for s in diar_cache]
-        else:
-            diarization = diarize(wav_path, hf_token=hf_token)
-            write_json("diarization.json", diarization, hash_key=hash_key)
-        progress.update(task, completed=1)
+        # Stages 2+3: diarize and transcribe are independent — run them
+        # concurrently (diarization typically on MPS GPU, Whisper on CPU,
+        # so they barely contend). Speaker assignment happens afterwards.
+        diar_task = progress.add_task("[cyan]Diarizing speakers...", total=1)
+        tr_task = progress.add_task("[cyan]Transcribing...", total=1)
 
-        # Stage 3: transcribe
-        task = progress.add_task("[cyan]Transcribing...", total=1)
-        transcript_cache = read_json("transcript.json", hash_key=hash_key)
-        if config.reuse_cache and transcript_cache is not None:
-            transcript = Transcript.model_validate(transcript_cache)
-        else:
-            whisper_segs = transcribe(str(wav_path), model_size=config.whisper_model)
-            transcript = assign_speakers(whisper_segs, diarization)
-            write_json("transcript.json", transcript.model_dump(), hash_key=hash_key)
-        progress.update(task, completed=1)
+        transcript_cache = (
+            read_json("transcript.json", hash_key=hash_key) if config.reuse_cache else None
+        )
+
+        def _run_diarization() -> list[tuple[float, float, str]]:
+            diar_cache = read_json("diarization.json", hash_key=hash_key)
+            if config.reuse_cache and diar_cache is not None:
+                return [(float(s[0]), float(s[1]), str(s[2])) for s in diar_cache]
+            d = diarize(wav_path, hf_token=hf_token)
+            write_json("diarization.json", d, hash_key=hash_key)
+            return d
+
+        def _run_whisper() -> list[dict]:
+            return transcribe(
+                str(wav_path),
+                model_size=config.whisper_model,
+                initial_prompt=config.asr_prompt,
+                backend=config.whisper_backend,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            diar_future = pool.submit(_run_diarization)
+            whisper_future = pool.submit(_run_whisper) if transcript_cache is None else None
+
+            diarization = diar_future.result()
+            progress.update(diar_task, completed=1)
+
+            if transcript_cache is not None:
+                transcript = Transcript.model_validate(transcript_cache)
+            else:
+                assert whisper_future is not None
+                whisper_segs = whisper_future.result()
+                transcript = assign_speakers(whisper_segs, diarization)
+                write_json("transcript.json", transcript.model_dump(), hash_key=hash_key)
+            progress.update(tr_task, completed=1)
 
         # Stage 3.5: clean transcript (LLM). Fixes ASR-misheard technical
         # terms before Q+A extraction. Cached separately so the original
         # transcript is preserved for diff/review.
-        task = progress.add_task("[cyan]Cleaning transcript...", total=1)
+        task = progress.add_task("[cyan]Cleaning transcript...", total=None)
         cleaned_cache = read_json("cleaned_transcript.json", hash_key=hash_key)
         if config.reuse_cache and cleaned_cache is not None:
             transcript = Transcript.model_validate(cleaned_cache)
+            progress.update(task, total=1, completed=1)
         else:
-            transcript = clean_transcript(client, transcript, domain=config.domain)
+            transcript = clean_transcript(
+                client,
+                transcript,
+                domain=config.domain,
+                terminology=config.terms_path,
+                concurrency=config.clean_concurrency,
+                progress_callback=lambda done, total: progress.update(
+                    task, completed=done, total=total
+                ),
+            )
             write_json(
                 "cleaned_transcript.json", transcript.model_dump(), hash_key=hash_key
             )
-        progress.update(task, completed=1)
 
-        # Stage 4: build Q+A pairs
+        # Stage 4: build Q+A pairs (rule-based then LLM refinement)
         task = progress.add_task("[cyan]Building Q&A pairs...", total=1)
         labeled = label_speakers(transcript)
-        pairs = build_qa_pairs(labeled)
-        # Skip pairs with empty questions or very short answers (< 20 chars)
-        analyzable = [p for p in pairs if p.question and len(p.answer.strip()) >= 20]
+        rule_pairs = build_qa_pairs(labeled)
+        pairs = build_qa_pairs_with_llm(client, labeled) or rule_pairs
+        # Split into questions (LLM-evaluated) and conversations (no LLM).
+        # Conversations still appear in the report but in a separate section.
+        analyzable = [p for p in pairs if not p.is_conversation and p.question and len(p.answer.strip()) >= 20]
+        conversation_pairs = [p for p in pairs if p.is_conversation]
         progress.update(task, completed=1)
         if not analyzable:
             raise RuntimeError(
@@ -147,15 +196,23 @@ def run_pipeline(
                 "Check that the audio has two distinct speakers and clear questions."
             )
 
-        # Stage 5: per-pair analysis
+        # Stage 5: per-pair analysis. Independent LLM calls are executed
+        # with a bounded thread pool; prompts are identical to sequential
+        # execution, so results are the same. Per-pair results are cached
+        # at pairs/<n>.json so re-runs with --reuse-cache skip the calls.
         task = progress.add_task(
             "[cyan]Analyzing pairs...", total=len(analyzable)
         )
         pair_analyses: list[PairAnalysis] = []
         per_pair_ran = False  # tracks whether any pair was newly analyzed
-        for p in analyzable:
-            # Per-pair LLM analysis cached at pairs/<n>.json so re-runs
-            # with --reuse-cache skip the per-pair DeepSeek call.
+        # Conversation pairs are emitted as-is (no LLM call) and slotted
+        # into the report at the right position by pair_index.
+        for p in conversation_pairs:
+            pair_analyses.append(analyze_conversation(p))
+
+        results: dict[int, PairAnalysis] = {}  # position in `analyzable` -> analysis
+        to_analyze: list[tuple[int, QAPair]] = []
+        for i, p in enumerate(analyzable):
             pair_cache_path = artifact_path(
                 f"pairs/{p.pair_index}.json", hash_key=hash_key
             )
@@ -165,15 +222,30 @@ def run_pipeline(
                 else None
             )
             if cached_pair is not None:
-                pair_analyses.append(PairAnalysis.model_validate(cached_pair))
+                results[i] = PairAnalysis.model_validate(cached_pair)
+                progress.update(task, advance=1)
             else:
-                pa = analyze_pair(client, p, cache_dir=pair_cache_dir)
-                write_json(
-                    f"pairs/{p.pair_index}.json", pa.model_dump(), hash_key=hash_key
-                )
-                pair_analyses.append(pa)
-                per_pair_ran = True
-            progress.update(task, advance=1)
+                to_analyze.append((i, p))
+
+        if to_analyze:
+            workers = max(1, min(config.llm_concurrency, len(to_analyze)))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {
+                    pool.submit(analyze_pair, client, p, cache_dir=pair_cache_dir): (i, p)
+                    for i, p in to_analyze
+                }
+                for fut in as_completed(futures):
+                    i, p = futures[fut]
+                    pa = fut.result()
+                    write_json(
+                        f"pairs/{p.pair_index}.json", pa.model_dump(), hash_key=hash_key
+                    )
+                    results[i] = pa
+                    per_pair_ran = True
+                    progress.update(task, advance=1)
+
+        for i in sorted(results):
+            pair_analyses.append(results[i])
 
         # Stage 6: aggregate. Cached at final_report.json, but ONLY reused
         # if the per-pair stage did not run in this invocation. Otherwise
@@ -226,7 +298,7 @@ def run_pipeline(
             guide = cached_guide
         else:
             task = progress.add_task("[cyan]Generating study guide...", total=1)
-            guide = generate_study_guide(client, report)
+            guide = generate_study_guide(client, report, concurrency=config.llm_concurrency)
             write_json("study_guide.json", guide, hash_key=hash_key)
             progress.update(task, completed=1)
         study_md = render_study_guide(guide)

@@ -38,6 +38,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Whisper model size (default: large-v3; small/medium are faster downloads)",
     )
     p.add_argument(
+        "--whisper-backend",
+        choices=["faster-whisper", "openai-whisper"],
+        default="faster-whisper",
+        help="Transcription engine. openai-whisper is torch-based and runs on "
+        "CUDA GPUs (much faster on NVIDIA hardware); faster-whisper is the "
+        "CPU-optimized default (default: faster-whisper)",
+    )
+    p.add_argument(
+        "--asr-prompt",
+        default="",
+        help="Optional prompt passed to Whisper to bias it toward expected technical vocabulary",
+    )
+    p.add_argument(
         "--reuse-cache",
         action="store_true",
         help="Skip audio extraction, diarization, and transcription if cached",
@@ -58,6 +71,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Free-text description of the interview domain, used to give the LLM context for technical-term corrections in the transcript cleaning stage",
     )
     p.add_argument(
+        "--terms-file",
+        type=Path,
+        default=None,
+        help="Optional JSON terminology file used to pre-mark ASR-misheard technical terms",
+    )
+    p.add_argument(
         "--no-study-guide",
         action="store_true",
         help="Skip generating the per-knowledge-point study guide (default: on)",
@@ -67,6 +86,21 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Output path for the study guide Markdown (default: <output_dir>/study-guide.md)",
+    )
+    p.add_argument(
+        "--llm-concurrency",
+        type=int,
+        default=4,
+        help="Parallel LLM calls for per-pair analysis and study-guide batches "
+        "(identical prompts, so output is unchanged; default: 4)",
+    )
+    p.add_argument(
+        "--clean-concurrency",
+        type=int,
+        default=4,
+        help="Parallel chunks for transcript cleaning. Values >1 give each chunk a "
+        "snapshot of prior corrections instead of the full history; use 1 for the "
+        "original strictly-sequential behaviour (default: 4)",
     )
     return p
 
@@ -110,11 +144,16 @@ def main(argv: list[str] | None = None) -> int:
         input_path=args.input,
         output_path=args.out,
         whisper_model=args.model,
+        whisper_backend=args.whisper_backend,
+        asr_prompt=args.asr_prompt,
         reuse_cache=args.reuse_cache,
         candidate_background=args.background,
         domain=args.domain,
+        terms_path=args.terms_file,
         enable_study_guide=not args.no_study_guide,
         study_guide_path=args.study_guide_out,
+        llm_concurrency=max(1, args.llm_concurrency),
+        clean_concurrency=max(1, args.clean_concurrency),
     )
     if not args.no_study_guide:
         guide_path = args.study_guide_out or (args.out.parent / "study-guide.md")

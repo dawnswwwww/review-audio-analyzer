@@ -6,6 +6,7 @@ the per-call data. All prompts are in Chinese and require JSON output.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from jinja2 import Environment, StrictUndefined
@@ -173,6 +174,278 @@ def clean_transcript_prompt(*, domain: str, transcript_json: str) -> str:
     return tmpl.render(domain=domain, transcript_json=transcript_json)
 
 
+# ---------------------------------------------------------------------------
+# Context-aware, multi-stage transcript cleaning prompts
+# ---------------------------------------------------------------------------
+
+CORRECT_CHUNK_SYSTEM = (
+    "你是一位技术面试转写校对员。原始音频已经过 ASR（语音识别）转写，"
+    "但 ASR 在处理技术术语时经常出错（音近字误识别）。\n\n"
+    "任务：对给定转写片段，修正 ASR 误识别的技术术语（人名、框架名、算法名、"
+    "协议名、库名、概念名）。\n\n"
+    "原则：\n"
+    "1. 只修正术语，不润色、不改写句子。\n"
+    "2. 利用上下文（面试方向 + 上下文片段 + 已确认纠正）判断错误术语。\n"
+    "3. 上下文强信号暗示某个具体术语时，主动纠正；仅在完全无上下文线索时保留原文。\n"
+    "4. 对每处修改，在 corrections 字段里说明 `原词 → 改后词：依据`。\n"
+)
+
+CORRECT_CHUNK_USER_TEMPLATE = """## 面试方向
+{{ domain }}
+
+## 前文已确认的纠正（供一致性参考）
+{{ previous_corrections_json }}
+
+## 系统预筛选的候选术语（供参考）
+{{ candidate_terms_json }}
+
+## 当前片段（含前后上下文）
+上下文前：
+{% for u in context_before %}
+[{{ u.index }}] {{ u.speaker }}: {{ u.text }}
+{% endfor %}
+
+待纠正片段：
+{% for u in target_utterances %}
+[{{ u.index }}] {{ u.speaker }}: {{ u.text }}
+{% endfor %}
+
+上下文后：
+{% for u in context_after %}
+[{{ u.index }}] {{ u.speaker }}: {{ u.text }}
+{% endfor %}
+
+## 任务
+对「待纠正片段」中的**每一条** utterance 校对 `text` 字段，输出严格 JSON：
+
+```json
+{
+  "corrected": [
+    {
+      "index": 0,
+      "speaker": "与原文一致",
+      "start": 0.0,
+      "end": 0.0,
+      "text": "校对后的文本",
+      "corrections": ["原词 → 改后词：依据"]
+    }
+  ]
+}
+```
+
+**必须遵守：**
+- `corrected` 数组长度必须等于「待纠正片段」的 utterance 数量（{{ target_utterances | length }} 条），**不能只返回修改过的条目**。
+- 没有修改的 utterance 也要完整输出，`text` 与原文相同，`corrections` 为空数组。
+- `index` / `speaker` / `start` / `end` 必须逐字复制输入值，不要省略或修改。
+- `text` 仅修改术语，不要润色、改写或补全。
+- 只输出 JSON，不要任何额外文本。
+"""
+
+
+SPLIT_QA_SYSTEM = (
+    "你是一位对话结构分析专家。给定一段面试对话（已经被粗略切分成 Q&A 对），"
+    "你的任务是判断哪些相邻的 Q&A 对实际上属于同一道题——即面试官重述、补充、"
+    "细化同一个问题后候选人回答。\n\n"
+    "**重点：候选人没回答也是合并信号**\n"
+    "如果一对相邻 Q&A，第一题的答案里候选人明确表示没听清、没听懂、声音太低、"
+    "请求重复等（即使只有一句『我没听清』），而第二题的问题与第一题考察同一知识点、"
+    "表述不同但语义相关（特别是包含『我再讲述一下』、『就是说』等重述短语），"
+    "**应当合并**。\n\n"
+    "规则：\n"
+    "1. 当一对相邻 Q&A 的第二个问题明显是面试官对第一题的追问或重述"
+    "（例如：候选人没听清、面试官换种说法再问一次、面试官补充限定条件），"
+    "应当合并到第一题。\n"
+    "2. 当两道题考察的知识点完全不同、答案也明显不同时，不应合并。\n"
+    "3. 合并后保留最早问题作为第一题的问题。\n"
+    "4. 合并后保留所有候选人的回答内容（包括没听清的部分）。\n\n"
+    "输出：返回需要合并的相邻题号对列表，例如：第一题和第二题合并、第五题和第六题合并。"
+    "如果都不需要合并，返回空数组。\n"
+)
+
+SPLIT_QA_USER_TEMPLATE = """## 候选 Q&A 对
+{% for p in pairs %}
+### 第 {{ p.pair_index }} 题
+问题：{{ p.question }}
+回答：{{ p.answer }}
+{% endfor %}
+
+## 任务
+判断哪些相邻的 Q&A 对应当合并（属于同一道面试题的不同表述）。
+
+输出严格 JSON：
+
+```json
+{
+  "merge_groups": [[1, 2], [5, 6]],
+  "notes": ["简短解释每组为什么合并"]
+}
+```
+
+- `merge_groups` 是题号数组的数组，每组内的题号应该连号（相邻的题目合并）。
+- 没有需要合并的就返回空数组。
+- 只输出 JSON，不要任何额外文本。
+"""
+
+
+def split_qa_prompt(*, pairs: list[dict[str, Any]]) -> str:
+    """Render the Q&A splitting prompt."""
+    tmpl = _ENV.from_string(SPLIT_QA_USER_TEMPLATE)
+    return tmpl.render(pairs=pairs)
+
+
+def correct_chunk_prompt(
+    *,
+    domain: str,
+    previous_corrections: list[dict[str, Any]],
+    candidate_terms: list[dict[str, Any]],
+    context_before: list[dict[str, Any]],
+    target_utterances: list[dict[str, Any]],
+    context_after: list[dict[str, Any]],
+) -> str:
+    """Render the correction prompt for a single chunk."""
+    tmpl = _ENV.from_string(CORRECT_CHUNK_USER_TEMPLATE)
+    return tmpl.render(
+        domain=domain,
+        previous_corrections_json=json.dumps(previous_corrections, ensure_ascii=False, indent=2),
+        candidate_terms_json=json.dumps(candidate_terms, ensure_ascii=False, indent=2),
+        context_before=context_before,
+        target_utterances=target_utterances,
+        context_after=context_after,
+    )
+
+
+REVIEW_CHUNK_SYSTEM = (
+    "你是一位技术转写校对复审员。检查上一轮 LLM 的纠正是否合理，是否有遗漏或过度纠正。\n\n"
+    "原则：\n"
+    "1. 只修正真正的技术术语误识别，不修改候选人真实的口语表达。\n"
+    "2. 上下文强信号暗示某个具体术语时，主动纠正；仅在完全无上下文线索时保留原文。\n"
+    "3. 与 previous_corrections 中的已确认纠正保持一致。\n"
+    "4. 你可以在复审中撤销或修改上一轮的纠正。\n"
+)
+
+REVIEW_CHUNK_USER_TEMPLATE = """## 面试方向
+{{ domain }}
+
+## 前文已确认的纠正
+{{ previous_corrections_json }}
+
+## 系统预筛选候选术语
+{{ candidate_terms_json }}
+
+## 待复审片段（左侧为原文，右侧为初纠结果）
+{% for item in review_items %}
+---
+原文 [{{ item.index }}] {{ item.speaker }}:
+{{ item.original_text }}
+
+初纠 [{{ item.index }}]:
+{{ item.corrected_text }}
+
+初纠说明：{{ item.corrections | join("；") }}
+{% endfor %}
+
+## 任务
+请逐条复审，输出严格 JSON：
+
+```json
+{
+  "corrected": [
+    {
+      "index": 0,
+      "speaker": "与原文一致",
+      "start": 0.0,
+      "end": 0.0,
+      "text": "复审后的最终文本",
+      "corrections": ["原词 → 改后词：依据"]
+    }
+  ],
+  "review_notes": ["对争议纠错的说明，可选"]
+}
+```
+
+**必须遵守：**
+- `corrected` 数组长度必须等于待复审片段的 utterance 数量（{{ review_items | length }} 条），**不能只返回修改过的条目**。
+- 无修改的条目也要完整输出，`corrections` 为空数组。
+- `index` / `speaker` / `start` / `end` 必须逐字复制输入值。
+- 你可以保留、撤销或修改初纠结果。
+- 只输出 JSON，不要任何额外文本。
+"""
+
+
+def review_chunk_prompt(
+    *,
+    domain: str,
+    previous_corrections: list[dict[str, Any]],
+    candidate_terms: list[dict[str, Any]],
+    review_items: list[dict[str, Any]],
+) -> str:
+    """Render the review prompt for a single chunk."""
+    tmpl = _ENV.from_string(REVIEW_CHUNK_USER_TEMPLATE)
+    return tmpl.render(
+        domain=domain,
+        previous_corrections_json=json.dumps(previous_corrections, ensure_ascii=False, indent=2),
+        candidate_terms_json=json.dumps(candidate_terms, ensure_ascii=False, indent=2),
+        review_items=review_items,
+    )
+
+
+FINAL_VALIDATE_SYSTEM = (
+    "你是一位最终校验员。所有转写片段已经过两轮纠正和复审，现在需要你做全局一致性检查。\n\n"
+    "校验重点：\n"
+    "1. **同一术语前后一致** —— 同一个原文在同一面试中应被纠正为同一个词。\n"
+    "2. **纠正是否合理** —— 某些纠正可能在局部合理但在全局语境下是错的。\n"
+    "3. **不要大面积重写** —— 只修正明显不一致或遗漏的术语，保留候选人原话。\n"
+    "4. **支持修订早期片段** —— 如果发现前文纠正有误，可以输出 revision 进行修正。\n"
+)
+
+FINAL_VALIDATE_USER_TEMPLATE = """## 面试方向
+{{ domain }}
+
+## 全局纠正记录
+{{ all_corrections_json }}
+
+## 全部转写文本（ compact 形式，用于全局语境判断）
+{% for u in full_text_lines %}
+[{{ u.index }}] {{ u.text }}
+{% endfor %}
+
+## 任务
+请基于全局纠正记录和完整转写文本做最终校验，输出严格 JSON：
+
+```json
+{
+  "revisions": [
+    {
+      "index": 0,
+      "new_text": "修订后的文本",
+      "reason": "修订原因"
+    }
+  ],
+  "notes": ["对全局一致性问题的说明，可选"]
+}
+```
+
+- `revisions` 为空数组表示无需修订。
+- 只输出需要修改的 utterance；未列出的保持现有纠正结果。
+- 只输出 JSON，不要任何额外文本。
+"""
+
+
+def final_validate_prompt(
+    *,
+    domain: str,
+    all_corrections: list[dict[str, Any]],
+    full_text_lines: list[dict[str, Any]],
+) -> str:
+    """Render the final global validation prompt."""
+    tmpl = _ENV.from_string(FINAL_VALIDATE_USER_TEMPLATE)
+    return tmpl.render(
+        domain=domain,
+        all_corrections_json=json.dumps(all_corrections, ensure_ascii=False, indent=2),
+        full_text_lines=full_text_lines,
+    )
+
+
 STUDY_GUIDE_SYSTEM = (
     "你是一位资深的技术导师。你的任务是把「面试中出现的知识点」转变成一份「自学者"
     "能真正用来学习的材料」——不是百科介绍，而是「下次再被问到这个，能不能答好」的"
@@ -197,8 +470,8 @@ STUDY_GUIDE_USER_TEMPLATE = """## 这场面试涉及的所有知识点
 
 ```json
 {
-  "guide_title": "字符串，给这份学习指南起一个标题",
-  "preface": "字符串，2-3 句开场白：这场面试涉及哪几个知识领域、整体学习建议",
+  "guide_title": "字符串，给这份学习指南起一个标题{% if not is_first_batch %}（如果非首批次，可省略，输出空字符串）{% endif %}",
+  "preface": "字符串，2-3 句开场白{% if not is_first_batch %}（如果非首批次，可省略，输出空字符串）{% endif %}",
   "knowledge_points": [
     {
       "name": "字符串，知识点名称",
@@ -225,10 +498,16 @@ STUDY_GUIDE_USER_TEMPLATE = """## 这场面试涉及的所有知识点
 - `common_mistakes` 必须是 3 条
 - `self_check` 必须是 2 道题
 - 如果两个知识点高度重复，合并为一条并在 `name` 里说明（如「单向数据流（含 React 状态管理）」）
+{% if is_first_batch %}- 这是第一批，请输出 guide_title 和 preface。{% else %}- 这是后续批次，只需要输出 knowledge_points 字段（可省略 guide_title 和 preface）。{% endif %}
 """
 
 
-def study_guide_prompt(*, knowledge_points_json: str) -> str:
+def study_guide_prompt(
+    *, knowledge_points_json: str, is_first_batch: bool = True
+) -> str:
     """Render the user prompt for study guide generation."""
     tmpl = _ENV.from_string(STUDY_GUIDE_USER_TEMPLATE)
-    return tmpl.render(knowledge_points_json=knowledge_points_json)
+    return tmpl.render(
+        knowledge_points_json=knowledge_points_json,
+        is_first_batch=is_first_batch,
+    )

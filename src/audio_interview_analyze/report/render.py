@@ -63,25 +63,41 @@ def render_markdown(report: FinalReport) -> str:
     sections.append("")
     if report.pair_analyses:
         for p in report.pair_analyses:
-            sections.append(f"### 第 {p.pair_index} 题")
-            sections.append("")
-            sections.append(f"**题目摘要：** {p.question_summary}")
-            sections.append("")
-            sections.append(f"**答案评价：** {p.answer_evaluation}")
-            sections.append("")
-            if p.highlights:
-                sections.append("**亮点：**")
-                for h in p.highlights:
-                    sections.append(f"- {h}")
+            if p.is_conversation:
+                # Casual exchange: show the original dialog only.
+                sections.append(f"### 第 {p.pair_index} 题（交流）")
                 sections.append("")
-            if p.weaknesses:
-                sections.append("**不足：**")
-                for w in p.weaknesses:
-                    sections.append(f"- {w}")
+                sections.append(f"> **面试官：** {p.question}")
+                sections.append(">")
+                sections.append(f"> **候选人：** {p.answer}")
                 sections.append("")
-            if p.improvement_suggestions:
-                sections.append(f"**改进建议：** {p.improvement_suggestions}")
+                if p.conversation_note:
+                    sections.append(f"**模型备注：** {p.conversation_note}")
+                    sections.append("")
+            else:
+                sections.append(f"### 第 {p.pair_index} 题")
                 sections.append("")
+                sections.append(f"**面试官提问：** {p.question}")
+                sections.append("")
+                sections.append(f"**候选人回答：** {p.answer}")
+                sections.append("")
+                sections.append(f"**题目摘要：** {p.question_summary}")
+                sections.append("")
+                sections.append(f"**答案评价：** {p.answer_evaluation}")
+                sections.append("")
+                if p.highlights:
+                    sections.append("**亮点：**")
+                    for h in p.highlights:
+                        sections.append(f"- {h}")
+                    sections.append("")
+                if p.weaknesses:
+                    sections.append("**不足：**")
+                    for w in p.weaknesses:
+                        sections.append(f"- {w}")
+                    sections.append("")
+                if p.improvement_suggestions:
+                    sections.append(f"**改进建议：** {p.improvement_suggestions}")
+                    sections.append("")
     else:
         sections.append("（无）")
         sections.append("")

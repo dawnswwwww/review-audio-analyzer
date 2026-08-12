@@ -1,13 +1,25 @@
 """DeepSeek HTTP client with retry / backoff.
 
 DeepSeek exposes an OpenAI-compatible chat-completions endpoint, so we use
-plain httpx rather than the OpenAI SDK. Retry policy: 3 attempts with
-exponential backoff (2s, 4s, 8s) on 5xx and 429. 4xx other than 429 are
-treated as terminal errors with a clear message.
+plain httpx rather than the OpenAI SDK. Retry policy: up to ``max_retries``
+attempts with exponential backoff on 5xx, 429, and transport errors. 4xx
+other than 429 are treated as terminal errors with a clear message.
+
+The client holds a single shared ``httpx.Client`` (thread-safe, keep-alive
+connection pool) so concurrent pipeline stages can issue requests in
+parallel without paying a TCP+TLS handshake per call.
+
+The default total timeout is generous (600s): requests are non-streaming,
+so the server only starts responding after the full completion is
+generated. Large outputs (``max_tokens`` up to 8000) routinely take
+several minutes — a short timeout here causes false ReadTimeout failures
+followed by exponential-backoff retry storms, which historically turned a
+full pipeline run into a multi-hour job.
 """
 
 from __future__ import annotations
 
+import sys
 import time
 from typing import Any
 
@@ -34,15 +46,36 @@ class DeepSeekClient:
         *,
         api_key: str,
         base_url: str = "https://api.deepseek.com",
-        timeout: float = 120.0,
-        max_retries: int = 3,
-        backoff_seconds: tuple[float, ...] = (2.0, 4.0, 8.0),
+        timeout: float = 600.0,
+        connect_timeout: float = 10.0,
+        max_retries: int = 8,
+        backoff_seconds: tuple[float, ...] = (2.0, 4.0, 8.0, 16.0, 30.0, 60.0, 90.0, 120.0),
+        max_connections: int = 32,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.connect_timeout = connect_timeout
         self.max_retries = max_retries
         self.backoff_seconds = backoff_seconds
+        # Use a connect timeout shorter than the total timeout so we
+        # don't hang forever on DNS / TCP-level failures.
+        self._client = httpx.Client(
+            timeout=httpx.Timeout(
+                connect=min(connect_timeout, timeout),
+                read=timeout,
+                write=timeout,
+                pool=timeout,
+            ),
+            limits=httpx.Limits(
+                max_connections=max_connections,
+                max_keepalive_connections=max_connections,
+            ),
+        )
+
+    def close(self) -> None:
+        """Close the underlying connection pool."""
+        self._client.close()
 
     def chat(
         self,
@@ -82,14 +115,21 @@ class DeepSeekClient:
         last_error: Exception | None = None
         for attempt in range(self.max_retries):
             try:
-                with httpx.Client(timeout=self.timeout) as client:
-                    resp = client.post(url, headers=headers, json=body)
+                resp = self._client.post(url, headers=headers, json=body)
             except httpx.HTTPError as e:
                 last_error = e
                 if attempt + 1 < self.max_retries:
-                    time.sleep(self.backoff_seconds[attempt])
+                    sleep_for = self.backoff_seconds[min(attempt, len(self.backoff_seconds) - 1)]
+                    print(
+                        f"[DeepSeek] {type(e).__name__} on attempt "
+                        f"{attempt + 1}/{self.max_retries}, retrying in {sleep_for}s",
+                        file=sys.stderr,
+                    )
+                    time.sleep(sleep_for)
                     continue
-                raise DeepSeekError(f"HTTP transport error after {self.max_retries} attempts: {e}") from e
+                raise DeepSeekError(
+                    f"HTTP transport error after {self.max_retries} attempts: {e}"
+                ) from e
 
             if resp.status_code == 200:
                 data = resp.json()

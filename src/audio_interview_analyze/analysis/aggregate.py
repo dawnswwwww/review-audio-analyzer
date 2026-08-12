@@ -26,7 +26,7 @@ from audio_interview_analyze.analysis.prompts import (
 from audio_interview_analyze.llm.deepseek import DeepSeekClient
 from audio_interview_analyze.report.model import FinalReport, KnowledgePoint, PairAnalysis
 
-AGGREGATE_MODEL = "deepseek-chat"
+AGGREGATE_MODEL = "deepseek-v4-pro"
 AGGREGATE_TEMPERATURE = 0.4
 AGGREGATE_MAX_TOKENS = 6000
 AGGREGATE_MAX_INPUT_TOKENS = 50_000

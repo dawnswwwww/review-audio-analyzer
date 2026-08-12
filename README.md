@@ -64,9 +64,11 @@ uv run audio-interview-analyze path/to/interview.mp4 --model small
 # Provide candidate background (years of experience, target role)
 uv run audio-interview-analyze path/to/interview.mp4 --background "3 年 Java 后端"
 
-# Specify the interview domain (helps the LLM correct technical terms
-# in the transcript cleaning stage)
+# Specify the interview domain (helps the LLM correct technical terms)
 uv run audio-interview-analyze path/to/interview.mp4 --domain "后端 / Go / Kubernetes"
+
+# (Advanced) provide a custom terminology dictionary for known ASR errors
+uv run audio-interview-analyze path/to/interview.mp4 --terms-file my-terms.json
 ```
 
 The first run downloads ~3 GB of Whisper weights and ~100 MB of pyannote
@@ -94,19 +96,48 @@ for the full design spec.
 The pipeline has 8 stages:
 
 ```
-extract → diarize → transcribe → clean_transcript (LLM) → build_qa_pairs →
-analyze_pair (LLM) → aggregate (LLM) → render_markdown
+extract → diarize → transcribe → clean_transcript (multi-stage LLM) →
+build_qa_pairs → analyze_pair (LLM) → aggregate (LLM) → render_markdown
 ```
 
-The `clean_transcript` stage is an LLM proofreading pass that fixes
-ASR-misheard technical terms (e.g., "BUD" → "Vue", "灵火" → "流火")
-before Q+A extraction. Each correction is recorded with reasoning in
-the LLM's output. Use `--domain` to give the LLM context (default:
-"软件工程 / 前端开发 / AI Agent").
+The `clean_transcript` stage runs a multi-stage proofreading pipeline:
+
+1. **Context-aware chunking** — splits at long pauses while preserving
+   speaker turns and Q+A continuity.
+2. **LLM correction** — corrects each chunk, with previous corrections as
+   reference for consistency.
+3. **LLM review** — validates original-vs-corrected and can reverse
+   over-corrections.
+4. **Global final validation** — reviews the full correction log for
+   inconsistencies and supports revising earlier corrections.
+
+Use `--domain` to give the LLM context (default:
+"软件工程 / 前端开发 / AI Agent").  If you have a list of known systematic
+ASR errors, you can optionally provide a terminology dictionary with
+`--terms-file`.
 
 All intermediate artifacts (extracted WAV, diarization, transcript,
 cleaned transcript, per-pair JSON) are cached under
 `./.interview-cache/<content-hash>/` so re-runs are cheap.
+
+## Custom terminology file format
+
+If you want to give the model extra hints for specific ASR errors, create
+a JSON file like `my-terms.json`:
+
+```json
+{
+  "terms": [
+    {"correct": "Vue", "aliases": ["BUD"], "category": "前端框架"},
+    {"correct": "前端", "aliases": ["前段"], "category": "岗位"},
+    {"correct": "Fiber", "aliases": ["Fibre"], "category": "React"}
+  ]
+}
+```
+
+Aliases are matched both as exact substrings and by pinyin similarity,
+so the LLM can use them as strong hints while still making the final
+context-aware decision.
 
 ## Development
 
