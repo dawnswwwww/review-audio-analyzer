@@ -89,6 +89,13 @@ def _transcribe_openai(
     transcription into minutes on a GB10/Blackwell GPU. The output shape is
     identical to the faster-whisper path so ``assign_speakers`` consumes it
     unchanged.
+
+    openai-whisper is more hallucination-prone than faster-whisper (which
+    runs a VAD filter by default), especially on long silent stretches and
+    with automatic language detection. We therefore pin the language to
+    Chinese (these interviews are in Chinese), pass a domain anchor prompt,
+    disable text conditioning, and raise the no-speech threshold so silent
+    segments are dropped instead of hallucinated.
     """
     import torch  # noqa: PLC0415
     import whisper  # type: ignore[import-untyped]  # noqa: PLC0415
@@ -99,7 +106,11 @@ def _transcribe_openai(
     result = model.transcribe(
         audio_path,
         word_timestamps=True,
-        initial_prompt=initial_prompt or None,
+        language="zh" if not initial_prompt else None,
+        initial_prompt=initial_prompt or DEFAULT_INITIAL_PROMPT,
+        condition_on_previous_text=False,
+        no_speech_threshold=0.6,
+        logprob_threshold=-1.0,
         fp16=(device == "cuda"),
     )
     out: list[dict] = []
