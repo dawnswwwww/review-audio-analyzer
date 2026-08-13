@@ -47,7 +47,7 @@ from audio_interview_analyze.report.model import Transcript, Utterance
 
 logger = logging.getLogger(__name__)
 
-CLEAN_TRANSCRIPT_MODEL = "deepseek-v4-pro"
+CLEAN_TRANSCRIPT_MODEL = "deepseek-v4-flash"
 # Low temperature: we want faithful corrections, not creative rewrites.
 CLEAN_TRANSCRIPT_TEMPERATURE = 0.2
 CORRECT_MAX_TOKENS = 8000

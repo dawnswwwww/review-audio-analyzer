@@ -29,7 +29,7 @@ from audio_interview_analyze.analysis.prompts import (
 from audio_interview_analyze.llm.deepseek import DeepSeekClient
 from audio_interview_analyze.report.model import FinalReport
 
-STUDY_GUIDE_MODEL = "deepseek-v4-pro"
+STUDY_GUIDE_MODEL = "deepseek-v4-flash"
 STUDY_GUIDE_TEMPERATURE = 0.4
 STUDY_GUIDE_MAX_TOKENS = 8000
 STUDY_GUIDE_BATCH_THRESHOLD = 10

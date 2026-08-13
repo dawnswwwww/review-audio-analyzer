@@ -21,7 +21,7 @@ from audio_interview_analyze.analysis.prompts import (
 from audio_interview_analyze.llm.deepseek import DeepSeekClient
 from audio_interview_analyze.report.model import PairAnalysis, QAPair
 
-ANALYZE_MODEL = "deepseek-v4-pro"
+ANALYZE_MODEL = "deepseek-v4-flash"
 ANALYZE_TEMPERATURE = 0.3
 ANALYZE_MAX_TOKENS = 2000
 RETRY_SUFFIX = "\n请确保输出是合法 JSON。"

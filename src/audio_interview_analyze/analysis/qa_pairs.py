@@ -332,7 +332,7 @@ def _classify_and_merge_pairs(pairs: list[QAPair]) -> list[QAPair]:
     return _merge_interjection_pairs(classified)
 
 
-SPLIT_QA_MODEL = "deepseek-v4-pro"
+SPLIT_QA_MODEL = "deepseek-v4-flash"
 SPLIT_QA_TEMPERATURE = 0.2
 SPLIT_QA_MAX_TOKENS = 2000
 
