@@ -344,7 +344,7 @@ def _call_llm_json(client: DeepSeekClient, system: str, user: str) -> dict:
 
     fence_re = _re.compile(r"^```(?:json)?\s*|\s*```$", _re.MULTILINE)
     last_error: Exception | None = None
-    for attempt in range(2):
+    for attempt in range(4):
         suffix = "\n请确保输出是合法 JSON。" if attempt == 1 else ""
         raw = client.chat(
             system=system,

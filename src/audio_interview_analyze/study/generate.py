@@ -47,7 +47,7 @@ def _chat_json(client: DeepSeekClient, system: str, user: str) -> dict:
     """Call the LLM with response_format=json_object, retrying once on parse failure."""
     last_raw: str | None = None
     last_error: Exception | None = None
-    for attempt in range(2):
+    for attempt in range(4):
         suffix = RETRY_SUFFIX if attempt == 1 else ""
         raw = client.chat(
             system=system,

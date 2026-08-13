@@ -136,7 +136,28 @@ class DeepSeekClient:
                 choices = data.get("choices") or []
                 if not choices:
                     raise DeepSeekError("DeepSeek returned no choices")
-                return choices[0]["message"]["content"]
+                content = choices[0]["message"].get("content") or ""
+                if not content.strip():
+                    # Reasoning models occasionally spend the whole output
+                    # budget on reasoning_content and leave content empty.
+                    # That yields an unparseable response, so retry instead
+                    # of returning "" to the caller.
+                    last_error = DeepSeekError(
+                        "DeepSeek returned empty content (reasoning only?)"
+                    )
+                    if attempt + 1 < self.max_retries:
+                        sleep_for = self.backoff_seconds[
+                            min(attempt, len(self.backoff_seconds) - 1)
+                        ]
+                        print(
+                            f"[DeepSeek] empty content on attempt "
+                            f"{attempt + 1}/{self.max_retries}, retrying in {sleep_for}s",
+                            file=sys.stderr,
+                        )
+                        time.sleep(sleep_for)
+                        continue
+                    raise last_error
+                return content
 
             if resp.status_code in (401, 403):
                 raise DeepSeekAuthError(

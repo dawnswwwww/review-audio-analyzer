@@ -94,7 +94,7 @@ def aggregate(
 
     last_raw: str | None = None
     last_error: Exception | None = None
-    for attempt in range(2):
+    for attempt in range(4):
         suffix = RETRY_SUFFIX if attempt == 1 else ""
         raw = client.chat(
             system=AGGREGATE_SYSTEM,
